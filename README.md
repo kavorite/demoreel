@@ -17,6 +17,38 @@ some other random direction in a small cone, then you probably don't actually
 need to know how much damage they did in order to identify that they're hacking.
 
 
+## Installation
+
+Haha, you thought. Nah, but this this is actually a build section. You can only
+install from source.
+
+in the project root:
+```sh
+$ python3 -m venv venv # optional: create a virtual environment
+$ . venv/bin/activate  # you can also activate a different one obviously
+$ pip install maturin
+$ maturin develop --release  # this should automatically build and install a wheel for you
+```
+
+## Python Usage
+
+```py
+import demoreel
+
+demo_path = REPLACE_ME
+with open(demo_path, "rb") as istrm:
+    demo_data = istrm.read()
+
+# unintelligible garbage, recommend wrangling it with https://pola.rs/
+inputs = demoreel.unspool(demo_data)
+pass
+```
+
+This will build a wheel in the `targets/` subdirectory that you can `pip
+install` in other virtual environments. Or if you prefer, you can just run your
+application code in this source tree. Go ahead. I'm not the file police.
+
+### TODO
 - [ ] Flatten + yield higher-level types of messages
     - [ ] Specify allowed types from Python land (maybe as [JSON paths][jpath]?)
 
