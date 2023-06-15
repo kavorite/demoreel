@@ -32,6 +32,10 @@ $ pip install maturin
 $ maturin develop --release  # this should automatically build and install a wheel for you
 ```
 
+This will build a wheel in the `targets/` subdirectory that you can `pip
+install` in other virtual environments. Or if you prefer, you can just run your
+application code in this source tree. Go ahead. I'm not the file police.
+
 ## Python Usage
 
 ```py
@@ -45,10 +49,6 @@ with open(demo_path, "rb") as istrm:
 inputs = demoreel.unspool(demo_data)
 pass
 ```
-
-This will build a wheel in the `targets/` subdirectory that you can `pip
-install` in other virtual environments. Or if you prefer, you can just run your
-application code in this source tree. Go ahead. I'm not the file police.
 
 ### TODO
 - [ ] Flatten + yield higher-level types of messages
