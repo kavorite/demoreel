@@ -17,7 +17,7 @@ need to know how much damage they did in order to identify that they're hacking.
 
 
 - [ ] Flatten + yield higher-level types of messages
-    - [ ] Specify allowed types from Python land (maybe as [JSON paths]?)
+    - [ ] Specify allowed types from Python land (maybe as [JSON paths][jpath]?)
 
 [maturin]: https://maturin.rs/
 [pyo3]: https://pyo3.rs/
