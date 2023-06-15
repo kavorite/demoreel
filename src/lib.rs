@@ -10,7 +10,7 @@ use tf_demo_parser::demo::packet::Packet;
 use tf_demo_parser::demo::parser::{DemoHandler, RawPacketStream};
 use tf_demo_parser::Demo;
 
-use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyString};
+use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
 #[derive(Serialize)]
 struct Traced<'t>(Packet<'t>);
@@ -19,7 +19,7 @@ mod errors {
         errors {
             InvalidNumber(x: serde_json::Number) {
                 description("invalid number"),
-                display("'{}' cannot be represented in double-precision floating-point", x)
+                display("'{}' cannot be represented either as i- or f-64", x)
             }
         }
 
@@ -58,8 +58,10 @@ fn json_to_py<'py>(py: Python<'py>, v: serde_json::Value) -> Result<PyObject> {
         Value::Null => Ok(py.None()),
         Value::Bool(p) => Ok(PyBool::new(py, p).into()),
         Value::Number(n) => {
-            if let Some(x) = n.as_f64() {
-                Ok(PyFloat::new(py, x).into())
+            if let Some(k) = n.as_i64() {
+                Ok(k.into_py(py))
+            } else if let Some(x) = n.as_f64() {
+                Ok(x.into_py(py))
             } else {
                 Err(Error::from(ErrorKind::InvalidNumber(n)))
             }
