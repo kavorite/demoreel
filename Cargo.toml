@@ -1,0 +1,21 @@
+[package]
+name = "demoreel"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "demoreel"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.71"
+bitbuffer = "0.10.9"
+error-chain = "0.12.4"
+pyo3 = { version = "0.19"}
+tf-demo-parser = { git = "https://github.com/demostf/parser", version = "0.4.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+pyo3 = { version = "0.19", features = ["auto-initialize"] }
