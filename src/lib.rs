@@ -115,9 +115,19 @@ fn unspool<'py>(
         let stream = demo.get_stream();
         let parser = DemoParser::new_with_analyser(stream, GameStateAnalyser::new());
         let (_header, mut ticker) = parser.ticker()?;
+        let mut tick_seq = 0;
+        let mut prev_tick = None;
         while let Some(t) = ticker.next()? {
-            let tick: u32 = t.tick.into();
-            if (tick % tick_freq.unwrap_or(1)) == 0 {
+            if let Some(prev) = prev_tick {
+                if prev != t.tick {
+                    tick_seq += 1
+                }
+                if tick_seq % tick_freq.unwrap_or(1) != 0 {
+                    continue;
+                }
+            }
+            prev_tick = Some(t.tick);
+            if (tick_seq % tick_freq.unwrap_or(1)) == 0 {
                 let value = serde_json::to_value(t.state)?;
                 if let Some(v) = json_match(path.as_ref(), &value) {
                     matches.push(v);
