@@ -115,12 +115,12 @@ fn unspool<'py>(
         let stream = demo.get_stream();
         let parser = DemoParser::new_with_analyser(stream, GameStateAnalyser::new());
         let (_header, mut ticker) = parser.ticker()?;
-        let mut tick_seq = 0;
+        let mut tick_seq: u32 = 0;
         let mut prev_tick = None;
         while let Some(t) = ticker.next()? {
             if let Some(prev) = prev_tick {
                 if prev != t.tick {
-                    tick_seq += 1
+                    tick_seq = tick_seq.wrapping_add(1);
                 }
                 if tick_seq % tick_freq.unwrap_or(1) != 0 {
                     continue;
