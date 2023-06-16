@@ -46,7 +46,7 @@ with open(demo_path, "rb") as istrm:
     demo_data = istrm.read()
 
 # unintelligible garbage, recommend wrangling it with https://pola.rs/
-inputs = demoreel.unspool(demo_data, tick_freq="$.players[*][?(@.class!='other')]")
+inputs = demoreel.unspool(demo_data, json_path="$.players[*][?(@.class!='other')]")
 ```
 
 ### TODO
