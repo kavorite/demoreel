@@ -46,13 +46,11 @@ with open(demo_path, "rb") as istrm:
     demo_data = istrm.read()
 
 # unintelligible garbage, recommend wrangling it with https://pola.rs/
-inputs = demoreel.unspool(demo_data)
-pass
+inputs = demoreel.unspool(demo_data, tick_freq="$.players[*][?(@.class!='other')]")
 ```
 
 ### TODO
-- [ ] Flatten + yield higher-level types of messages
-    - [ ] Specify allowed types from Python land (maybe as [JSON paths][jpath]?)
+- Surface intra-tick player input again for each player's state
 
 [maturin]: https://maturin.rs/
 [pyo3]: https://pyo3.rs/

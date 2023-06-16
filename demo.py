@@ -1,9 +1,10 @@
 from glob import glob
 import demoreel
 
-demo_path = glob("./demoreel/*.dem")[0]
-with open(demo_path, "rb") as istrm:
+with open("Round_1_Map_1_Borneo.dem", "rb") as istrm:
     demo_data = istrm.read()
 
-inputs = demoreel.unspool(demo_data)
+inputs = demoreel.unspool(
+    demo_data, json_path="$.players[*][?(@.class!='other')]", tick_freq=1
+)
 pass
