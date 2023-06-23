@@ -300,15 +300,8 @@ impl MessageHandler for DamageTracer {
                                 .remove(&event.user_id)
                                 .into_iter()
                                 .flatten()
-                                .rev()
-                                .take(128)
                                 .interleave(
-                                    self.traces
-                                        .remove(&event.attacker)
-                                        .into_iter()
-                                        .flatten()
-                                        .rev()
-                                        .take(128),
+                                    self.traces.remove(&event.attacker).into_iter().flatten(),
                                 )
                                 .collect::<Vec<_>>();
                             let traced = DamageTrace {
@@ -322,11 +315,7 @@ impl MessageHandler for DamageTracer {
                     self.source = Some(source);
                 }
             }
-            _ => {
-                // Message::PacketEntities(packet) => {
-                // retrieve and trace states for all players that received an update
-                // let ent_ids: Vec<_> = packet.entities.iter().map(|ent| ent.entity_index).collect();
-            }
+            _ => {}
         };
     }
 

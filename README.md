@@ -31,6 +31,7 @@ application code in this source tree. Go ahead. I'm not the file police.
 ## Python Usage
 
 ```py
+import concurrent.futures as cft
 import demoreel
 import polars as pl  # <- Arrow IPC instead of nested python dicts from "JSON"
 
@@ -38,10 +39,22 @@ demo_path = REPLACE_ME
 with open(demo_path, "rb") as istrm:
     demo_data = istrm.read()
 
-roster = demoreel.roster(demo_data)
-source = roster.filter(~pl.col("is_fake_player"))["steam_id"][0]
-traces = demoreel.dtrace(demo_data)
-source_traces = demoreel.dtrace(demo_data, source)
+
+with cft.ThreadPoolExecutor() as pool:
+    roster = demoreel.roster(demo_data)  # O(1) space, O(n) time
+    bounds = demoreel.bounds(demo_data)  # O(1) space, O(n) time
+    traces = demoreel.dtrace(demo_data)  # O(n) space, O(n) time
+    cft.wait({roster, traces, bounds})   # -> all reduce to O(n) space, O(n) time
+    traces = traces.result()
+    bounds = bounds.result()
+    roster = roster.result()
+    # only the traces of a specific player
+    source = roster.filter(~pl.col("is_fake_player"))["steam_id"][0]
+    traces_of_source = demoreel.dtrace(demo_data, source)
+    # traces with positions standardized over world boundaries
+    traces_by_bounds = traces.with_columns(
+        pl.col("position") / (bounds["boundary_max"] - bounds["boundary_min"])
+    )
 ```
 
 ### TODO

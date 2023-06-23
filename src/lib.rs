@@ -23,7 +23,7 @@ use serialize::{json_match, json_to_py, to_polars};
 #[cfg(test)]
 mod tests {
     use super::*;
-    const PAYLOAD: &'static [u8] = include_bytes!("../Round_1_Map_1_Borneo.dem");
+    const PAYLOAD: &'static [u8] = include_bytes!("../demos/Round_1_Map_1_Borneo.dem");
     #[test]
     fn dtrace_succeeds() {
         Python::with_gil(|py| {
@@ -49,10 +49,39 @@ fn roster<'py>(py: Python<'py>, buf: &[u8]) -> Result<PyDataFrame> {
     })
 }
 
+#[pyfunction]
+#[pyo3(signature = (buf))]
+fn bounds<'py>(py: Python<'py>, buf: &[u8]) -> Result<PyDataFrame> {
+    let worlds = py.allow_threads(|| -> Result<_> {
+        let demo = Demo::new(&buf);
+        let stream = demo.get_stream();
+        let parser = DemoParser::new_with_analyser(stream, GameStateAnalyser::new());
+        let (_header, mut ticker) = parser.ticker()?;
+        let mut prev_world = None;
+        let mut worlds = Vec::new();
+        let mut ticks = Vec::new();
+        while let Some(t) = ticker.next()? {
+            if prev_world.as_ref() != t.state.world.as_ref() {
+                prev_world = t.state.world.clone();
+                ticks.push(u32::from(t.tick));
+                if let Some(world) = &t.state.world {
+                    worlds.push(world.clone());
+                }
+            }
+        }
+        let mut frame = to_polars(worlds.as_slice(), None)?;
+        let mut ticks = Series::new("tick", ticks);
+        ticks.set_sorted_flag(polars::series::IsSorted::Ascending);
+        let frame = frame.with_column(ticks)?;
+        Ok(std::mem::take(frame))
+    })?;
+    Ok(PyDataFrame(worlds))
+}
+
 /// Trace each instance of damage back over the states of the players having
-/// dealt them, interleaving the state of the source and the
-/// target. If a particular player is specified as a source, buffer their status
-/// and their victims' only.
+/// dealt them, interleaving the state of the source and the target. If a
+/// particular player is specified as a source, buffer their status and their
+/// victims' only.
 #[pyfunction]
 #[pyo3(signature = (buf, source=None))]
 fn dtrace<'py>(py: Python<'py>, buf: &[u8], source: Option<String>) -> Result<PyObject> /* Result<PyDataFrame> */
@@ -153,5 +182,6 @@ fn demoreel(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtrace, m)?)?;
     m.add_function(wrap_pyfunction!(unspool, m)?)?;
     m.add_function(wrap_pyfunction!(roster, m)?)?;
+    m.add_function(wrap_pyfunction!(bounds, m)?)?;
     Ok(())
 }
