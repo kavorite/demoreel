@@ -1,113 +1,118 @@
 #[macro_use]
 extern crate error_chain;
 
-use pyo3::exceptions::PyValueError;
+mod errors;
+mod serialize;
+mod tracer;
+
+use polars::prelude::*;
 use pyo3::prelude::*;
+use pyo3_polars::PyDataFrame;
 use serde::Serialize;
-use tf_demo_parser::demo::packet::Packet;
+use serde_arrow::schema::TracingOptions;
 use tf_demo_parser::demo::parser::gamestateanalyser::{GameState, GameStateAnalyser};
 use tf_demo_parser::demo::parser::DemoParser;
 use tf_demo_parser::Demo;
-
-use pyo3::types::{PyDict, PyList};
-use serde_json_path::JsonPath;
-
-#[derive(Serialize)]
-struct Traced<'t>(Packet<'t>);
-mod errors {
-    error_chain! {
-        errors {
-            InvalidNumber(x: serde_json::Number) {
-                description("invalid number"),
-                display("'{}' cannot be represented either as i- or f-64", x)
-            }
-        }
-
-        foreign_links {
-            WireFormat(tf_demo_parser::ParseError);
-            Buffering(bitbuffer::BitError);
-            Python(pyo3::PyErr);
-            Io(std::io::Error);
-            Json(serde_json::Error);
-            PathParse(serde_json_path::ParseError);
-            PathMatch(serde_json_path::AtMostOneError);
-        }
-    }
-}
+use tracer::{DamageTracer, RosterAnalyser, Snapshot, TickSnapshot};
 
 use errors::*;
+use pyo3::types::PyList;
+use serde_json_path::JsonPath;
+use serialize::{json_match, json_to_py, to_polars};
 
-impl std::convert::From<Error> for PyErr {
-    fn from(err: Error) -> PyErr {
-        PyValueError::new_err(err.to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const PAYLOAD: &'static [u8] = include_bytes!("../Round_1_Map_1_Borneo.dem");
+    #[test]
+    fn dtrace_succeeds() {
+        Python::with_gil(|py| {
+            // assert!(unspool(py, PAYLOAD, None, None).is_ok());
+            // let target = Some("[U:1:82537314]".to_owned());
+            let target = None;
+            assert!(dtrace(py, PAYLOAD, target).is_ok());
+            // assert!(roster(py, PAYLOAD).is_ok());
+        });
     }
 }
 
-fn json_to_py<'py>(py: Python<'py>, v: &serde_json::Value) -> Result<PyObject> {
-    use serde_json::Value;
-    match v {
-        Value::Object(obj) => {
-            let dict = PyDict::new(py);
-            for (k, v) in obj.into_iter() {
-                dict.set_item(k, json_to_py(py, v)?)?;
+/// Return metadata identifying all players present in the replay.
+#[pyfunction]
+#[pyo3(signature = (buf))]
+fn roster<'py>(py: Python<'py>, buf: &[u8]) -> Result<PyDataFrame> {
+    py.allow_threads(|| -> Result<_> {
+        let demo = Demo::new(&buf);
+        let stream = demo.get_stream();
+        let parser = DemoParser::new_with_analyser(stream, RosterAnalyser::new());
+        let (_header, roster) = parser.parse()?;
+        Ok(PyDataFrame(to_polars(roster.players.as_ref(), None)?))
+    })
+}
+
+/// Trace each instance of damage back over the states of the players having
+/// dealt them, interleaving the state of the source and the
+/// target. If a particular player is specified as a source, buffer their status
+/// and their victims' only.
+#[pyfunction]
+#[pyo3(signature = (buf, source=None))]
+fn dtrace<'py>(py: Python<'py>, buf: &[u8], source: Option<String>) -> Result<PyObject> /* Result<PyDataFrame> */
+{
+    let states = py.allow_threads(|| -> Result<_> {
+        let demo = Demo::new(&buf);
+        let stream = demo.get_stream();
+        let tracer = DamageTracer::new(source);
+        let parser = DemoParser::new_with_analyser(stream, tracer);
+        let (_header, mut ticker) = parser.ticker()?;
+        let mut states = DataFrame::empty();
+        states.align_chunks();
+        let mut prev_uids = None;
+        while let Some(t) = ticker.next()? {
+            if let Some(state) = t.state.borrow_mut().take() {
+                let uids = state.source.user_id.zip(state.victim.user_id);
+                if uids != prev_uids
+                    && uids.map(|(v, t)| v != t).unwrap_or(false)
+                    && !state.states.is_empty()
+                {
+                    prev_uids = prev_uids.take().or(uids);
+                    let (ticks, snaps): (Vec<u32>, Vec<Snapshot>) = state
+                        .states
+                        .into_iter()
+                        .map(|TickSnapshot { tick, snapshot }| (tick, snapshot))
+                        .unzip();
+                    // TODO: why don't victim/attacker states match the underlying IDs?
+                    let (_, victim_id) = uids.unzip();
+                    let mut is_victim: Series =
+                        snaps.iter().map(|u| u.user_id == victim_id).collect();
+                    is_victim = std::mem::take(is_victim.rename("is_victim"));
+                    let tropt = TracingOptions::default()
+                        .allow_null_fields(true)
+                        .string_dictionary_encoding(false); // TOOD: figure out why we can't do this
+                    let ticks = Series::new("tick", ticks);
+                    let mut frame = to_polars(snaps.as_slice(), Some(tropt))?;
+                    let frame = frame.with_column(ticks)?;
+                    let frame = frame.with_column(is_victim)?;
+                    states.vstack_mut(&frame)?;
+                }
             }
-            Ok(dict.into())
         }
-        Value::Array(arr) => {
-            let istrm: Result<Vec<_>> = arr.into_iter().map(|x| json_to_py(py, x)).collect();
-            Ok(PyList::new(py, istrm?).into())
-        }
-        Value::Null => Ok(py.None()),
-        Value::Bool(p) => Ok(p.into_py(py)),
-        Value::Number(n) => {
-            if let Some(k) = n.as_i64() {
-                Ok(k.into_py(py))
-            } else if let Some(x) = n.as_f64() {
-                Ok(x.into_py(py))
-            } else {
-                Err(Error::from(ErrorKind::InvalidNumber(n.clone())))
-            }
-        }
-        Value::String(s) => Ok(s.into_py(py)),
-    }
+        Ok(PyDataFrame(states))
+    })?;
+    let output = states.into_py(py);
+    Ok(output)
 }
 
-fn json_match<'v>(
-    json_path: Option<&JsonPath>,
-    payload: &'v serde_json::Value,
-) -> Option<serde_json::Value> {
-    if let Some(path) = json_path {
-        let values = path
-            .query(payload)
-            .all()
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        match values.len() {
-            0 => None,
-            1 => Some(values.into_iter().next().unwrap()),
-            _ => Some(serde_json::Value::Array(values)),
-        }
-    } else {
-        Some(payload.clone())
-    }
-}
-
-#[derive(Serialize)]
-struct Snapshot<'s>(&'s GameState);
-
-/// parse(buf, /)
-/// --
-///
-/// Parses bytes into raw player inputs.
+/// Parses the .dem wire format into a JSON representation of player states.
 #[pyfunction]
 #[pyo3(signature = (buf, json_path=None, tick_freq=1))]
 fn unspool<'py>(
     py: Python<'py>,
-    buf: &'_ [u8],
-    json_path: Option<&'_ str>,
+    buf: &[u8],
+    json_path: Option<&str>,
     tick_freq: Option<u32>,
 ) -> Result<&'py PyList> {
+    #[derive(Serialize)]
+    struct Snapshot<'s>(&'s GameState);
+
     let matches = py.allow_threads(|| -> Result<_> {
         let path: Option<JsonPath> = json_path.map(JsonPath::parse).transpose()?;
         let mut matches = Vec::new();
@@ -145,19 +150,8 @@ fn unspool<'py>(
 
 #[pymodule]
 fn demoreel(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(dtrace, m)?)?;
     m.add_function(wrap_pyfunction!(unspool, m)?)?;
+    m.add_function(wrap_pyfunction!(roster, m)?)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const PAYLOAD: &'static [u8] = include_bytes!("../Round_1_Map_1_Borneo.dem");
-    #[test]
-    fn unspool_succeeds() {
-        Python::with_gil(|py| {
-            assert!(unspool(py, PAYLOAD, None, None).is_ok());
-        });
-        todo!("better tests pls");
-    }
 }

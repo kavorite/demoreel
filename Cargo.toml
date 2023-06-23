@@ -9,7 +9,6 @@ name = "demoreel"
 crate-type = ["cdylib"]
 
 [dependencies]
-anyhow = "1.0.71"
 bitbuffer = "0.10.9"
 error-chain = "0.12.4"
 pyo3 = { version = "0.19"}
@@ -17,6 +16,11 @@ tf-demo-parser = { git = "https://github.com/demostf/parser", version = "0.4.0" 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_json_path = "0.6"
+serde_arrow = { version = "0.7.1", features = ["arrow2-0-17"] }
+pyo3-polars = "0.4.1"
+polars = { version = "0.30.0", features = ["dtype-full"] }
+arrow2 = "0.17.2"
+itertools = "0.10.5"
 
 [dev-dependencies]
 pyo3 = { version = "0.19", features = ["auto-initialize"] }
