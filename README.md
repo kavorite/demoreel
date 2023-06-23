@@ -61,6 +61,7 @@ with cft.ThreadPoolExecutor() as pool:
 - Surface additional wire metadata requested by @tomeno (https://github.com/demostf/parser/pull/13)
   - in_pvs
   - simtime
+  - weapon types
   - etc, probably...
   - custom analyser?
 
