@@ -1,19 +1,55 @@
+use crate::errors::{Error, Result};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use bitbuffer::{BitRead, BitReadStream, LittleEndian};
 use itertools::Itertools;
 use serde::Serialize;
 use tf_demo_parser::demo::gamevent::GameEvent;
+use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::Message;
+use tf_demo_parser::demo::packet::Packet;
 use tf_demo_parser::demo::parser::analyser::UserInfo;
 use tf_demo_parser::demo::parser::gamestateanalyser::{
     Class, GameStateAnalyser, Player, PlayerState, Team, UserId,
 };
 use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
-use tf_demo_parser::demo::parser::MessageHandler;
+use tf_demo_parser::demo::parser::{DemoHandler, MessageHandler, NullHandler, RawPacketStream};
 use tf_demo_parser::demo::vector::Vector;
-use tf_demo_parser::MessageType;
+use tf_demo_parser::{Demo, MessageType};
+
+pub struct PacketStream<'s, 'h> {
+    packets: RawPacketStream<'s>,
+    handler: DemoHandler<'h, NullHandler>,
+    header: Header,
+}
+
+impl<'s, 'h> PacketStream<'s, 'h> {
+    pub fn new(demo: Demo<'s>) -> Result<Self> {
+        let mut stream = demo.get_stream();
+        let mut handler = DemoHandler::default();
+        let header = Header::read(&mut stream)?;
+        handler.handle_header(&header);
+        let packets = RawPacketStream::new(stream);
+        Ok(Self {
+            header,
+            handler,
+            packets,
+        })
+    }
+}
+
+impl<'s, 'h> Iterator for PacketStream<'s, 'h> {
+    type Item = Result<Packet<'s>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.packets
+            .next(&self.handler.state_handler)
+            .map_err(Error::from)
+            .transpose()
+    }
+}
 
 #[derive(Serialize, Clone)]
 pub struct Profile {

@@ -1,9 +1,9 @@
 #[macro_use]
 extern crate error_chain;
 
-mod errors;
-mod serialize;
-mod tracer;
+pub mod errors;
+pub mod serialize;
+pub mod tracer;
 
 use polars::prelude::*;
 use pyo3::prelude::*;
@@ -22,17 +22,38 @@ use serialize::{json_match, json_to_py, to_polars};
 
 #[cfg(test)]
 mod tests {
+    use crate::tracer::PacketStream;
+
     use super::*;
-    const PAYLOAD: &'static [u8] = include_bytes!("../demos/Round_1_Map_1_Borneo.dem");
+    const BORNEO: &'static [u8] = include_bytes!("../demos/Round_1_Map_1_Borneo.dem");
+    const FLAG_UPDATES: &'static [u8] = include_bytes!("../demos/flag_updates.dem");
     #[test]
     fn dtrace_succeeds() {
         Python::with_gil(|py| {
             // assert!(unspool(py, PAYLOAD, None, None).is_ok());
             // let target = Some("[U:1:82537314]".to_owned());
             let target = None;
-            assert!(dtrace(py, PAYLOAD, target).is_ok());
+            assert!(dtrace(py, BORNEO, target).is_ok());
             // assert!(roster(py, PAYLOAD).is_ok());
         });
+    }
+
+    #[test]
+    fn log_flag_updates() {
+        let demo = Demo::new(FLAG_UPDATES);
+        let packets = PacketStream::new(demo).unwrap();
+
+        for result in packets {
+            let packet = result.unwrap();
+            match &packet {
+                tf_demo_parser::demo::packet::Packet::ConsoleCmd(cmd) => {
+                    if cmd.command.starts_with("echo ") {
+                        println!("{}", cmd.command);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -176,6 +197,10 @@ fn unspool<'py>(
         .collect::<Result<Vec<_>>>()?;
     Ok(PyList::new(py, objects))
 }
+
+// #[pyfunction]
+// #[pyo3(signature = (buf, json_path = None))]
+// pub fn packets
 
 #[pymodule]
 fn demoreel(_py: Python, m: &PyModule) -> PyResult<()> {
