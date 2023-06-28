@@ -2,9 +2,13 @@ use crate::errors::{Error, Result};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use crate::serialize::to_polars;
 use bitbuffer::{BitRead, BitReadStream, LittleEndian};
 use itertools::Itertools;
+use polars::prelude::*;
 use serde::Serialize;
+use serde_arrow::schema::TracingOptions;
+use tf_demo_parser::demo::gameevent_gen::PlayerHurtEvent;
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
@@ -145,6 +149,8 @@ pub struct Snapshot {
     pub state: &'static str,
     pub user_id: Option<u16>,
     pub charge: u8,
+    pub in_pvs: bool,
+    pub simtime: u16,
 }
 
 impl From<Player> for Snapshot {
@@ -181,14 +187,30 @@ impl From<Player> for Snapshot {
             },
             user_id: value.info.map(|info| info.user_id.into()),
             charge: value.charge,
+            simtime: value.simtime,
+            in_pvs: value.in_pvs,
         }
     }
 }
 
 #[derive(Serialize, Clone)]
-pub struct TickSnapshot {
-    pub snapshot: Snapshot,
+pub struct WithTick<T: Serialize + Clone> {
+    pub inner: T,
     pub tick: u32,
+}
+
+impl<T: Serialize + Clone> WithTick<T> {
+    pub fn to_polars(
+        items: impl Iterator<Item = WithTick<T>>,
+        tropt: Option<TracingOptions>,
+    ) -> Result<DataFrame> {
+        let (ticks, inner): (Vec<u32>, Vec<T>) =
+            items.map(|WithTick { tick, inner }| (tick, inner)).unzip();
+        let ticks = Series::new("tick", ticks);
+        let mut frame = to_polars(inner.as_slice(), tropt)?;
+        let frame = std::mem::take(frame.with_column(ticks)?);
+        Ok(frame)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -197,15 +219,17 @@ pub struct DamageTrace {
     pub source: Snapshot,
     #[serde(skip_serializing)]
     pub victim: Snapshot,
-    pub states: Vec<TickSnapshot>,
+    pub states: Vec<WithTick<Snapshot>>,
+    pub events: Vec<WithTick<PlayerHurtEvent>>,
 }
 
 pub struct DamageTracer {
     pub source: Option<Player>,
     pub source_guid: Option<String>,
     pub integrator: GameStateAnalyser,
+    pub events: Vec<WithTick<PlayerHurtEvent>>,
     pub traced: RefCell<Option<DamageTrace>>,
-    pub traces: BTreeMap<u16, Vec<TickSnapshot>>,
+    pub traces: BTreeMap<u16, Vec<WithTick<Snapshot>>>,
     deltas: Vec<Player>,
 }
 impl DamageTracer {
@@ -217,6 +241,7 @@ impl DamageTracer {
             traced: None.into(),
             traces: BTreeMap::new(),
             deltas: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -285,9 +310,9 @@ impl MessageHandler for DamageTracer {
         for player in std::mem::take(&mut self.deltas).into_iter() {
             if let Some(UserInfo { user_id, .. }) = player.info {
                 let buffer = self.traces.entry(user_id.into()).or_insert(Vec::new());
-                let snapshot = player.clone().into();
+                let inner = player.clone().into();
                 let tick = tick.into();
-                buffer.push(TickSnapshot { tick, snapshot });
+                buffer.push(WithTick { tick, inner });
             }
         }
         match message {
@@ -303,6 +328,9 @@ impl MessageHandler for DamageTracer {
                     self.player_by_id(event.attacker).cloned()
                 };
                 if let Some(source) = source {
+                    let tick = self.integrator.state.tick.into();
+                    let inner = event.clone();
+                    self.events.push(WithTick { tick, inner });
                     let target = self.player_by_id(event.user_id);
                     let (prev_victim_is_target, some_source_is_attker) = {
                         let traced = self.traced.borrow();
@@ -340,8 +368,10 @@ impl MessageHandler for DamageTracer {
                                     self.traces.remove(&event.attacker).into_iter().flatten(),
                                 )
                                 .collect::<Vec<_>>();
+                            let events = std::mem::take(&mut self.events);
                             let traced = DamageTrace {
                                 states,
+                                events,
                                 source: source.clone().into(),
                                 victim: victim.into(),
                             };

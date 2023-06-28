@@ -4,7 +4,7 @@ use demoreel::serialize::json_match;
 use serde_json_path::JsonPath;
 use std::io::Read;
 use tf_demo_parser::demo::header::Header;
-use tf_demo_parser::demo::parser::*;
+use tf_demo_parser::demo::parser::{DemoHandler, RawPacketStream};
 use tf_demo_parser::Demo;
 
 fn main() -> Result<()> {

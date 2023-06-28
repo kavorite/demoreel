@@ -13,7 +13,7 @@ use serde_arrow::schema::TracingOptions;
 use tf_demo_parser::demo::parser::gamestateanalyser::{GameState, GameStateAnalyser};
 use tf_demo_parser::demo::parser::DemoParser;
 use tf_demo_parser::Demo;
-use tracer::{DamageTracer, RosterAnalyser, Snapshot, TickSnapshot};
+use tracer::{DamageTracer, RosterAnalyser, Snapshot, WithTick};
 
 use errors::*;
 use pyo3::types::PyList;
@@ -99,21 +99,27 @@ fn bounds<'py>(py: Python<'py>, buf: &[u8]) -> Result<PyDataFrame> {
     Ok(PyDataFrame(worlds))
 }
 
+#[pyclass(get_all)]
+pub struct DTrace {
+    states: PyDataFrame,
+    events: PyDataFrame,
+}
+
 /// Trace each instance of damage back over the states of the players having
 /// dealt them, interleaving the state of the source and the target. If a
 /// particular player is specified as a source, buffer their status and their
 /// victims' only.
 #[pyfunction]
-#[pyo3(signature = (buf, source=None))]
-fn dtrace<'py>(py: Python<'py>, buf: &[u8], source: Option<String>) -> Result<PyObject> /* Result<PyDataFrame> */
-{
-    let states = py.allow_threads(|| -> Result<_> {
-        let demo = Demo::new(&buf);
+#[pyo3(signature = (buffer, source=None))]
+fn dtrace<'py>(py: Python<'py>, buffer: &[u8], source: Option<String>) -> Result<DTrace> {
+    let (states, events) = py.allow_threads(|| -> Result<_> {
+        let demo = Demo::new(&buffer);
         let stream = demo.get_stream();
         let tracer = DamageTracer::new(source);
         let parser = DemoParser::new_with_analyser(stream, tracer);
         let (_header, mut ticker) = parser.ticker()?;
         let mut states = DataFrame::empty();
+        let mut events = DataFrame::empty();
         states.align_chunks();
         let mut prev_uids = None;
         while let Some(t) = ticker.next()? {
@@ -124,31 +130,32 @@ fn dtrace<'py>(py: Python<'py>, buf: &[u8], source: Option<String>) -> Result<Py
                     && !state.states.is_empty()
                 {
                     prev_uids = prev_uids.take().or(uids);
-                    let (ticks, snaps): (Vec<u32>, Vec<Snapshot>) = state
-                        .states
-                        .into_iter()
-                        .map(|TickSnapshot { tick, snapshot }| (tick, snapshot))
-                        .unzip();
-                    // TODO: why don't victim/attacker states match the underlying IDs?
                     let (_, victim_id) = uids.unzip();
-                    let mut is_victim: Series =
-                        snaps.iter().map(|u| u.user_id == victim_id).collect();
-                    is_victim = std::mem::take(is_victim.rename("is_victim"));
                     let tropt = TracingOptions::default()
                         .allow_null_fields(true)
                         .string_dictionary_encoding(false); // TOOD: figure out why we can't do this
-                    let ticks = Series::new("tick", ticks);
-                    let mut frame = to_polars(snaps.as_slice(), Some(tropt))?;
-                    let frame = frame.with_column(ticks)?;
-                    let frame = frame.with_column(is_victim)?;
-                    states.vstack_mut(&frame)?;
+                    let event_chunk =
+                        WithTick::to_polars(state.events.into_iter(), Some(tropt.clone()))?;
+                    events.vstack_mut(&event_chunk)?;
+                    let state_chunk = {
+                        let mut is_victim: Series = state
+                            .states
+                            .iter()
+                            .map(|u| u.inner.user_id == victim_id)
+                            .collect();
+                        is_victim = std::mem::take(is_victim.rename("is_victim"));
+                        let mut frame =
+                            WithTick::to_polars(state.states.into_iter(), Some(tropt.clone()))?;
+                        std::mem::take(frame.with_column(is_victim.clone())?)
+                    };
+                    states.vstack_mut(&state_chunk)?;
                 }
             }
         }
-        Ok(PyDataFrame(states))
+        Ok((PyDataFrame(states), PyDataFrame(events)))
     })?;
-    let output = states.into_py(py);
-    Ok(output)
+    let dtrace = DTrace { states, events };
+    Ok(dtrace)
 }
 
 /// Parses the .dem wire format into a JSON representation of player states.
@@ -197,10 +204,6 @@ fn unspool<'py>(
         .collect::<Result<Vec<_>>>()?;
     Ok(PyList::new(py, objects))
 }
-
-// #[pyfunction]
-// #[pyo3(signature = (buf, json_path = None))]
-// pub fn packets
 
 #[pymodule]
 fn demoreel(_py: Python, m: &PyModule) -> PyResult<()> {
