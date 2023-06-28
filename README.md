@@ -45,7 +45,7 @@ with cft.ThreadPoolExecutor() as pool:
     bounds = demoreel.bounds(demo_data)  # O(1) space, O(n) time
     traces = demoreel.dtrace(demo_data)  # O(n) space, O(n) time
     cft.wait({roster, traces, bounds})   # -> all reduce to O(n) space, O(n) time
-    traces = traces.result()
+    traces = traces.result().states
     bounds = bounds.result()
     roster = roster.result()
     # only the traces of a specific player
