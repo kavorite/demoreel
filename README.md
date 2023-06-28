@@ -41,9 +41,9 @@ with open(demo_path, "rb") as istrm:
 
 
 with cft.ThreadPoolExecutor() as pool:
-    roster = demoreel.roster(demo_data)  # O(1) space, O(n) time
-    bounds = demoreel.bounds(demo_data)  # O(1) space, O(n) time
-    traces = demoreel.dtrace(demo_data)  # O(n) space, O(n) time
+    roster = pool.submit(demoreel.roster, demo_data)  # O(1) space, O(n) time
+    bounds = pool.submit(demoreel.bounds, demo_data)  # O(1) space, O(n) time
+    traces = pool.submit(demoreel.dtrace, demo_data)  # O(n) space, O(n) time
     cft.wait({roster, traces, bounds})   # -> all reduce to O(n) space, O(n) time
     traces = traces.result().states
     bounds = bounds.result()
