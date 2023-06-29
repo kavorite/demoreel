@@ -1,22 +1,21 @@
 use crate::errors::{Error, Result};
-use std::cell::RefCell;
-use std::collections::BTreeMap;
 
 use crate::serialize::to_polars;
-use bitbuffer::{BitRead, BitReadStream, LittleEndian};
+use bitbuffer::BitRead;
 use itertools::Itertools;
 use polars::prelude::*;
 use serde::Serialize;
 use serde_arrow::schema::TracingOptions;
+use tf_demo_parser::demo::data::userinfo::PlayerInfo;
+use tf_demo_parser::demo::data::userinfo::UserInfo;
 use tf_demo_parser::demo::gameevent_gen::PlayerHurtEvent;
 use tf_demo_parser::demo::gamevent::GameEvent;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::gameevent::GameEventMessage;
 use tf_demo_parser::demo::message::Message;
 use tf_demo_parser::demo::packet::Packet;
-use tf_demo_parser::demo::parser::analyser::UserInfo;
 use tf_demo_parser::demo::parser::gamestateanalyser::{
-    Class, GameStateAnalyser, Player, PlayerState, Team, UserId,
+    Class, GameStateAnalyser, Player, PlayerState, Team, UserId, World,
 };
 use tf_demo_parser::demo::parser::handler::BorrowMessageHandler;
 use tf_demo_parser::demo::parser::{DemoHandler, MessageHandler, NullHandler, RawPacketStream};
@@ -69,75 +68,24 @@ pub struct Profile {
     pub more_extra: bool,
 }
 
-#[derive(Clone, Serialize)]
-pub struct RosterAnalyser {
-    pub players: Vec<Profile>,
-    #[serde(skip_serializing)]
-    player_ids: Vec<UserId>,
-}
-
-impl RosterAnalyser {
-    pub fn new() -> Self {
+impl From<PlayerInfo> for Profile {
+    fn from(player: PlayerInfo) -> Self {
         Self {
-            players: Vec::new(),
-            player_ids: Vec::new(),
+            friends_id: player.friends_id,
+            user_id: player.user_id,
+            name: player.name,
+            steam_id: player.steam_id,
+            is_fake_player: player.is_fake_player != 0,
+            is_hl_tv: player.is_hl_tv != 0,
+            is_replay: player.is_replay != 0,
+            custom_file: player.custom_file,
+            files_downloaded: player.files_downloaded,
+            more_extra: player.more_extra != 0,
         }
     }
 }
 
-impl MessageHandler for RosterAnalyser {
-    type Output = Self;
-
-    fn handle_string_entry(
-        &mut self,
-        table: &str,
-        index: usize,
-        entry: &tf_demo_parser::demo::packet::stringtable::StringTableEntry,
-        _parser_state: &tf_demo_parser::ParserState,
-    ) {
-        use tf_demo_parser::demo::data::userinfo::UserInfo;
-        if table == "userinfo" {
-            if let Some(UserInfo {
-                player_info: player,
-                ..
-            }) = {
-                let index = index as u16;
-                let text = entry.text.as_ref().map(AsRef::as_ref);
-                let data = entry.extra_data.as_ref().map(|extra| extra.data.clone());
-                UserInfo::parse_from_string_table(index, text, data).unwrap()
-            } {
-                if !self.player_ids.contains(&player.user_id) {
-                    self.players.push(Profile {
-                        friends_id: player.friends_id,
-                        user_id: player.user_id,
-                        name: player.name,
-                        steam_id: player.steam_id,
-                        is_fake_player: player.is_fake_player != 0,
-                        is_hl_tv: player.is_hl_tv != 0,
-                        is_replay: player.is_replay != 0,
-                        custom_file: player.custom_file,
-                        files_downloaded: player.files_downloaded,
-                        more_extra: player.more_extra != 0,
-                    });
-                    self.player_ids.push(player.user_id);
-                }
-            }
-        }
-    }
-
-    fn does_handle(message_type: tf_demo_parser::MessageType) -> bool {
-        matches!(
-            message_type,
-            MessageType::CreateStringTable | MessageType::UpdateStringTable
-        )
-    }
-
-    fn into_output(self, _state: &tf_demo_parser::ParserState) -> Self::Output {
-        self
-    }
-}
-
-#[derive(Serialize, Clone)]
+#[derive(Clone, Serialize)]
 pub struct Snapshot {
     pub position: Vector,
     pub health: u16,
@@ -213,35 +161,26 @@ impl<T: Serialize + Clone> WithTick<T> {
     }
 }
 
-#[derive(Clone, Serialize)]
-pub struct DamageTrace {
-    #[serde(skip_serializing)]
-    pub source: Snapshot,
-    #[serde(skip_serializing)]
-    pub victim: Snapshot,
-    pub states: Vec<WithTick<Snapshot>>,
-    pub events: Vec<WithTick<PlayerHurtEvent>>,
-}
-
-pub struct DamageTracer {
-    pub source: Option<Player>,
-    pub source_guid: Option<String>,
+pub struct Tracer {
     pub integrator: GameStateAnalyser,
     pub events: Vec<WithTick<PlayerHurtEvent>>,
-    pub traced: RefCell<Option<DamageTrace>>,
-    pub traces: BTreeMap<u16, Vec<WithTick<Snapshot>>>,
+    pub states: Vec<WithTick<Snapshot>>,
+    pub roster: Vec<Profile>,
+    pub bounds: Vec<WithTick<World>>,
+    user_ids: Vec<u16>,
     deltas: Vec<Player>,
 }
-impl DamageTracer {
-    pub fn new(source_guid: Option<String>) -> Self {
+
+impl Tracer {
+    pub fn new() -> Self {
         Self {
-            source_guid,
-            source: None,
             integrator: GameStateAnalyser::new(),
-            traced: None.into(),
-            traces: BTreeMap::new(),
+            states: Vec::new(),
             deltas: Vec::new(),
             events: Vec::new(),
+            roster: Vec::new(),
+            bounds: Vec::new(),
+            user_ids: Vec::new(),
         }
     }
 
@@ -251,49 +190,30 @@ impl DamageTracer {
         tick: tf_demo_parser::demo::data::DemoTick,
         parser_state: &tf_demo_parser::ParserState,
     ) {
-        self.deltas = {
-            let prev_states = self.integrator.state.players.clone();
-            self.integrator.handle_message(message, tick, parser_state);
-            self.integrator
-                .state
-                .players
-                .iter()
-                .chain(prev_states.iter())
-                .unique_by(|player| player.info.as_ref().map(|info| info.user_id))
-                .cloned()
-                .collect()
-        };
-    }
-
-    fn player_by_guid(&self, target: &str) -> Option<&Player> {
-        for player in self.integrator.state.players.iter() {
-            if let Some(UserInfo { steam_id, .. }) = &player.info {
-                if target == steam_id {
-                    return Some(player);
-                }
-            }
-        }
-        None
-    }
-
-    fn player_by_id(&self, target: u16) -> Option<&Player> {
-        for player in self.integrator.state.players.iter() {
-            if let Some(UserInfo { user_id, .. }) = player.info {
-                if target == Into::<u16>::into(user_id) {
-                    return Some(player);
-                }
-            }
-        }
-        None
+        let prev_states = self.integrator.state.players.clone();
+        self.integrator.handle_message(message, tick, parser_state);
+        self.deltas = self
+            .integrator
+            .state
+            .players
+            .iter()
+            .chain(prev_states.iter())
+            .unique_by(|player| player.info.as_ref().map(|info| info.user_id))
+            .cloned()
+            .collect();
     }
 }
 
-impl MessageHandler for DamageTracer {
-    type Output = RefCell<Option<DamageTrace>>;
+impl MessageHandler for Tracer {
+    type Output = Self;
 
     fn does_handle(message_type: MessageType) -> bool {
-        matches!(message_type, MessageType::GameEvent)
-            | GameStateAnalyser::does_handle(message_type)
+        matches!(
+            message_type,
+            MessageType::GameEvent
+                | MessageType::CreateStringTable
+                | MessageType::UpdateStringTable
+        ) || GameStateAnalyser::does_handle(message_type)
     }
 
     fn handle_header(&mut self, header: &tf_demo_parser::demo::header::Header) {
@@ -306,94 +226,61 @@ impl MessageHandler for DamageTracer {
         tick: tf_demo_parser::demo::data::DemoTick,
         parser_state: &tf_demo_parser::ParserState,
     ) {
+        self.integrator.handle_message(message, tick, parser_state);
+        let bounds = match (self.bounds.last(), self.integrator.state.world.as_ref()) {
+            (None, Some(bounds)) => Some(bounds),
+            (Some(prev), Some(next)) if &prev.inner != next => Some(next),
+            _ => None,
+        };
+        if let Some(bounds) = bounds {
+            let inner = bounds.clone();
+            let tick = tick.into();
+            self.bounds.push(WithTick { inner, tick });
+        }
+        if let Message::GameEvent(GameEventMessage {
+            event: GameEvent::PlayerHurt(event),
+            ..
+        }) = message
+        {
+            let inner = event.clone();
+            let tick = tick.into();
+            self.events.push(WithTick { tick, inner });
+        }
         self.compute_deltas(message, tick, parser_state);
         for player in std::mem::take(&mut self.deltas).into_iter() {
-            if let Some(UserInfo { user_id, .. }) = player.info {
-                let buffer = self.traces.entry(user_id.into()).or_insert(Vec::new());
+            if player.info.is_some() {
                 let inner = player.clone().into();
                 let tick = tick.into();
-                buffer.push(WithTick { tick, inner });
+                self.states.push(WithTick { tick, inner });
             }
         }
-        match message {
-            Message::GameEvent(GameEventMessage {
-                event: GameEvent::PlayerHurt(event),
-                ..
-            }) => {
-                let source = if let Some(guid) = &self.source_guid {
-                    self.source
-                        .take()
-                        .or_else(|| self.player_by_guid(&guid).cloned())
-                } else {
-                    self.player_by_id(event.attacker).cloned()
-                };
-                if let Some(source) = source {
-                    let tick = self.integrator.state.tick.into();
-                    let inner = event.clone();
-                    self.events.push(WithTick { tick, inner });
-                    let target = self.player_by_id(event.user_id);
-                    let (prev_victim_is_target, some_source_is_attker) = {
-                        let traced = self.traced.borrow();
-                        let prev_victim = traced.as_ref().map(|traced| &traced.victim);
-                        // TODO: surface weapon types, crit status
-                        let victim_target = prev_victim
-                            .and_then(|u| u.user_id)
-                            .zip(target.and_then(|u| u.info.as_ref()))
-                            .map(|(v, t)| v == u16::from(t.user_id))
-                            .unwrap_or(false);
-                        let source_attker = source
-                            .info
-                            .as_ref()
-                            .map(|info| info.user_id == event.attacker)
-                            .unwrap_or(true);
-                        (victim_target, source_attker)
-                    };
-                    if let Some(victim) = self.player_by_id(event.user_id).cloned() {
-                        if some_source_is_attker
-                            && !prev_victim_is_target
-                            && victim.info.is_some()
-                            && self
-                                .traces
-                                .get(&u16::from(victim.info.as_ref().unwrap().user_id))
-                                .map(|trace| trace.len())
-                                .unwrap_or(0)
-                                > 0
-                        {
-                            let states = self
-                                .traces
-                                .remove(&event.user_id)
-                                .into_iter()
-                                .flatten()
-                                .interleave(
-                                    self.traces.remove(&event.attacker).into_iter().flatten(),
-                                )
-                                .collect::<Vec<_>>();
-                            let events = std::mem::take(&mut self.events);
-                            let traced = DamageTrace {
-                                states,
-                                events,
-                                source: source.clone().into(),
-                                victim: victim.into(),
-                            };
-                            self.traced = RefCell::new(Some(traced));
-                        }
-                    }
-                    self.source = Some(source);
-                }
-            }
-            _ => {}
-        };
     }
 
     fn handle_string_entry(
         &mut self,
         table: &str,
         index: usize,
-        entries: &tf_demo_parser::demo::packet::stringtable::StringTableEntry,
+        entry: &tf_demo_parser::demo::packet::stringtable::StringTableEntry,
         parser_state: &tf_demo_parser::ParserState,
     ) {
         self.integrator
-            .handle_string_entry(table, index, entries, parser_state);
+            .handle_string_entry(table, index, entry, parser_state);
+        if table == "userinfo" {
+            if let Some(UserInfo {
+                player_info: player,
+                ..
+            }) = {
+                let index = index as u16;
+                let text = entry.text.as_ref().map(AsRef::as_ref);
+                let data = entry.extra_data.as_ref().map(|extra| extra.data.clone());
+                UserInfo::parse_from_string_table(index, text, data).unwrap()
+            } {
+                if !self.user_ids.contains(&player.user_id.into()) {
+                    self.user_ids.push(player.user_id.into());
+                    self.roster.push(Profile::from(player));
+                }
+            }
+        }
     }
 
     fn handle_data_tables(
@@ -416,12 +303,12 @@ impl MessageHandler for DamageTracer {
     }
 
     fn into_output(self, _state: &tf_demo_parser::ParserState) -> Self::Output {
-        self.traced
+        self
     }
 }
 
-impl BorrowMessageHandler for DamageTracer {
+impl BorrowMessageHandler for Tracer {
     fn borrow_output(&self, _state: &tf_demo_parser::ParserState) -> &Self::Output {
-        &self.traced
+        &self
     }
 }

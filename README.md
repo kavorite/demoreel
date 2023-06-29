@@ -31,39 +31,20 @@ application code in this source tree. Go ahead. I'm not the file police.
 ## Python Usage
 
 ```py
-import concurrent.futures as cft
 import demoreel
-import polars as pl  # <- Arrow IPC instead of nested python dicts from "JSON"
 
 demo_path = REPLACE_ME
 with open(demo_path, "rb") as istrm:
-    demo_data = istrm.read()
+    octets = istrm.read()
 
-
-with cft.ThreadPoolExecutor() as pool:
-    roster = pool.submit(demoreel.roster, demo_data)  # O(1) space, O(n) time
-    bounds = pool.submit(demoreel.bounds, demo_data)  # O(1) space, O(n) time
-    traces = pool.submit(demoreel.dtrace, demo_data)  # O(n) space, O(n) time
-    cft.wait({roster, traces, bounds})   # -> all reduce to O(n) space, O(n) time
-    traces = traces.result().states
-    bounds = bounds.result()
-    roster = roster.result()
-    # only the traces of a specific player
-    source = roster.filter(~pl.col("is_fake_player"))["steam_id"][0]
-    traces_of_source = demoreel.dtrace(demo_data, source)
-    # traces with positions standardized over world boundaries
-    traces_by_bounds = traces.with_columns(
-        pl.col("position") / (bounds["boundary_max"] - bounds["boundary_min"])
-    )
+# all game events, map boundaries, player states, and instances of damage
+dtrace = demoreel.dtrace(octets)  
 ```
 
 ### TODO
-- Surface additional wire metadata requested by @tomeno (https://github.com/demostf/parser/pull/13)
-  - in_pvs
-  - simtime
-  - weapon types
-  - etc, probably...
-  - custom analyser?
+- reassess automatic state integration
+  - dumping an entire state representation is really large
+  - maybe it's better to just publish sparse state _updates_ (e.g., hurt events)
 
 [maturin]: https://maturin.rs/
 [pyo3]: https://pyo3.rs/
