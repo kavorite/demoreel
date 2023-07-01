@@ -10,7 +10,7 @@ use pyo3_polars::PyDataFrame;
 use serde_arrow::schema::TracingOptions;
 use tf_demo_parser::demo::parser::DemoParser;
 use tf_demo_parser::Demo;
-use tracer::{Tracer, WithTick};
+use tracer::{Roster, Tracer, WithTick};
 
 use errors::*;
 use serialize::to_polars;
@@ -57,6 +57,17 @@ pub struct DTrace {
     bounds: PyDataFrame,
 }
 
+#[pyfunction]
+fn roster<'py>(py: Python<'py>, buffer: &[u8]) -> Result<PyDataFrame> {
+    py.allow_threads(|| -> Result<_> {
+        let demo = Demo::new(&buffer);
+        let stream = demo.get_stream();
+        let parser = DemoParser::new_with_analyser(stream, Roster::new());
+        let (_header, roster) = parser.parse()?;
+        Ok(PyDataFrame(to_polars(roster.roster.as_slice(), None)?))
+    })
+}
+
 /// Trace all all players, states, and instances of damage inflicted within a
 /// demo file, yielding the result as a set of polars dataframes.
 #[pyfunction]
@@ -73,7 +84,7 @@ fn dtrace<'py>(py: Python<'py>, buffer: &[u8]) -> Result<DTrace> {
         let states = WithTick::to_polars(dtrace.states.into_iter(), Some(tropt.clone()))?;
         let events = WithTick::to_polars(dtrace.events.into_iter(), Some(tropt.clone()))?;
         let bounds = WithTick::to_polars(dtrace.bounds.into_iter(), Some(tropt.clone()))?;
-        let roster = to_polars(dtrace.roster.as_slice(), Some(tropt.clone()))?;
+        let roster = to_polars(dtrace.roster.roster.as_slice(), Some(tropt.clone()))?;
         Ok((
             PyDataFrame(states),
             PyDataFrame(events),
@@ -93,5 +104,6 @@ fn dtrace<'py>(py: Python<'py>, buffer: &[u8]) -> Result<DTrace> {
 #[pymodule]
 fn demoreel(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtrace, m)?)?;
+    m.add_function(wrap_pyfunction!(roster, m)?)?;
     Ok(())
 }

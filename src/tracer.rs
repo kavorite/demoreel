@@ -161,13 +161,65 @@ impl<T: Serialize + Clone> WithTick<T> {
     }
 }
 
+pub struct Roster {
+    pub roster: Vec<Profile>,
+    user_ids: Vec<UserId>,
+}
+
+impl Roster {
+    pub fn new() -> Self {
+        let roster = Vec::new();
+        let user_ids = Vec::new();
+        Self { roster, user_ids }
+    }
+}
+
+impl MessageHandler for Roster {
+    type Output = Self;
+
+    fn does_handle(message_type: MessageType) -> bool {
+        matches!(
+            message_type,
+            MessageType::UpdateStringTable | MessageType::CreateStringTable
+        )
+    }
+
+    fn handle_string_entry(
+        &mut self,
+        table: &str,
+        index: usize,
+        entry: &tf_demo_parser::demo::packet::stringtable::StringTableEntry,
+        _parser_state: &tf_demo_parser::ParserState,
+    ) {
+        if table == "userinfo" {
+            if let Some(UserInfo {
+                player_info: player,
+                ..
+            }) = {
+                let index = index as u16;
+                let text = entry.text.as_ref().map(AsRef::as_ref);
+                let data = entry.extra_data.as_ref().map(|extra| extra.data.clone());
+                UserInfo::parse_from_string_table(index, text, data).unwrap()
+            } {
+                if !self.user_ids.contains(&player.user_id) {
+                    self.user_ids.push(player.user_id);
+                    self.roster.push(Profile::from(player));
+                }
+            }
+        }
+    }
+
+    fn into_output(self, _state: &tf_demo_parser::ParserState) -> Self {
+        self
+    }
+}
+
 pub struct Tracer {
     pub integrator: GameStateAnalyser,
     pub events: Vec<WithTick<PlayerHurtEvent>>,
     pub states: Vec<WithTick<Snapshot>>,
-    pub roster: Vec<Profile>,
+    pub roster: Roster,
     pub bounds: Vec<WithTick<World>>,
-    user_ids: Vec<u16>,
     deltas: Vec<Player>,
 }
 
@@ -178,9 +230,8 @@ impl Tracer {
             states: Vec::new(),
             deltas: Vec::new(),
             events: Vec::new(),
-            roster: Vec::new(),
+            roster: Roster::new(),
             bounds: Vec::new(),
-            user_ids: Vec::new(),
         }
     }
 
@@ -265,22 +316,8 @@ impl MessageHandler for Tracer {
     ) {
         self.integrator
             .handle_string_entry(table, index, entry, parser_state);
-        if table == "userinfo" {
-            if let Some(UserInfo {
-                player_info: player,
-                ..
-            }) = {
-                let index = index as u16;
-                let text = entry.text.as_ref().map(AsRef::as_ref);
-                let data = entry.extra_data.as_ref().map(|extra| extra.data.clone());
-                UserInfo::parse_from_string_table(index, text, data).unwrap()
-            } {
-                if !self.user_ids.contains(&player.user_id.into()) {
-                    self.user_ids.push(player.user_id.into());
-                    self.roster.push(Profile::from(player));
-                }
-            }
-        }
+        self.roster
+            .handle_string_entry(table, index, entry, parser_state);
     }
 
     fn handle_data_tables(
