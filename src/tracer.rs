@@ -41,6 +41,10 @@ impl<'s, 'h> PacketStream<'s, 'h> {
             packets,
         })
     }
+
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
 }
 
 impl<'s, 'h> Iterator for PacketStream<'s, 'h> {
