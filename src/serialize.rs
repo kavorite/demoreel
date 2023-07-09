@@ -61,10 +61,17 @@ pub fn json_match<'v>(
     }
 }
 
-pub fn to_polars<T: Serialize>(values: &[T], config: Option<TracingOptions>) -> Result<DataFrame> {
-    let config = config.unwrap_or_else(TracingOptions::default);
-    let fields = serialize_into_fields(values, config)?;
-    let array = serialize_into_arrays(fields.as_slice(), values)?;
-    let chunk = Chunk::try_new(array)?;
-    Ok(DataFrame::try_from((chunk, fields.as_ref()))?)
+pub fn to_polars<T: Serialize>(
+    values: &[T],
+    config: Option<TracingOptions>,
+) -> Result<Option<DataFrame>> {
+    if values.len() > 0 {
+        let config = config.unwrap_or_else(TracingOptions::default);
+        let fields = serialize_into_fields(values, config)?;
+        let array = serialize_into_arrays(fields.as_slice(), values)?;
+        let chunk = Chunk::try_new(array)?;
+        Ok(Some(DataFrame::try_from((chunk, fields.as_ref()))?))
+    } else {
+        Ok(None)
+    }
 }

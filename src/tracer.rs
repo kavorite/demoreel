@@ -155,13 +155,15 @@ impl<T: Serialize + Clone> WithTick<T> {
     pub fn to_polars(
         items: impl Iterator<Item = WithTick<T>>,
         tropt: Option<TracingOptions>,
-    ) -> Result<DataFrame> {
+    ) -> Result<Option<DataFrame>> {
         let (ticks, inner): (Vec<u32>, Vec<T>) =
             items.map(|WithTick { tick, inner }| (tick, inner)).unzip();
-        let ticks = Series::new("tick", ticks);
-        let mut frame = to_polars(inner.as_slice(), tropt)?;
-        let frame = std::mem::take(frame.with_column(ticks)?);
-        Ok(frame)
+        Ok(to_polars(inner.as_slice(), tropt)?
+            .map(|mut frame| {
+                let ticks = Series::new("tick", ticks);
+                frame.with_column(ticks).map(std::mem::take)
+            })
+            .transpose()?)
     }
 }
 

@@ -51,20 +51,20 @@ mod tests {
 
 #[pyclass(get_all)]
 pub struct DTrace {
-    states: PyDataFrame,
-    events: PyDataFrame,
-    roster: PyDataFrame,
-    bounds: PyDataFrame,
+    states: Option<PyDataFrame>,
+    events: Option<PyDataFrame>,
+    roster: Option<PyDataFrame>,
+    bounds: Option<PyDataFrame>,
 }
 
 #[pyfunction]
-fn roster<'py>(py: Python<'py>, buffer: &[u8]) -> Result<PyDataFrame> {
+fn roster<'py>(py: Python<'py>, buffer: &[u8]) -> Result<Option<PyDataFrame>> {
     py.allow_threads(|| -> Result<_> {
         let demo = Demo::new(&buffer);
         let stream = demo.get_stream();
         let parser = DemoParser::new_with_analyser(stream, Roster::new());
         let (_header, roster) = parser.parse()?;
-        Ok(PyDataFrame(to_polars(roster.roster.as_slice(), None)?))
+        Ok(to_polars(roster.roster.as_slice(), None)?.map(PyDataFrame))
     })
 }
 
@@ -86,10 +86,10 @@ fn dtrace<'py>(py: Python<'py>, buffer: &[u8]) -> Result<DTrace> {
         let bounds = WithTick::to_polars(dtrace.bounds.into_iter(), Some(tropt.clone()))?;
         let roster = to_polars(dtrace.roster.roster.as_slice(), Some(tropt.clone()))?;
         Ok((
-            PyDataFrame(states),
-            PyDataFrame(events),
-            PyDataFrame(roster),
-            PyDataFrame(bounds),
+            states.map(PyDataFrame),
+            events.map(PyDataFrame),
+            roster.map(PyDataFrame),
+            bounds.map(PyDataFrame),
         ))
     })?;
     let dtrace = DTrace {
